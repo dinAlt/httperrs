@@ -8,20 +8,46 @@ import (
 type key string
 
 const (
-	keyError = key("error")
+	keyOnError = key("onerror")
 )
 
-func SetError(r *http.Request, err error) *http.Request {
-	return r.WithContext(
-		context.WithValue(r.Context(), keyError, err))
+type ErrorHandler func(*HTTPError)
+
+type HTTPError struct {
+	HTTPRequest *http.Request
+	Inner       error
 }
 
-func GetError(r *http.Request) error {
-	err, _ := r.Context().Value(keyError).(error)
+func (e *HTTPError) Error() string {
+	return e.Inner.Error() +
+		" [host=" + e.HTTPRequest.URL.Hostname() + "] " +
+		"[path=" + e.HTTPRequest.URL.Path + "] " +
+		"[query=" + e.HTTPRequest.URL.RawQuery + "] " +
+		"[method=" + e.HTTPRequest.Method + "] "
+}
 
-	if err == nil {
-		return nil
+
+type Middleware struct {
+	ErrorHandler
+	Next http.Handler
+}
+
+func Push(r *http.Request, err error) {
+	onErr, _ := r.Context().Value(keyOnError).(ErrorHandler)
+	if onErr == nil {
+		panic("httperrs: no error handler in context")
 	}
 
-	return err
+	onErr(&HTTPError{HTTPRequest: r, Inner: err})
+}
+
+func (m *Middleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	m.Next.ServeHTTP(w,
+		r.WithContext(
+			context.WithValue(
+				r.Context(),
+				keyOnError,
+				m.ErrorHandler),
+		),
+	)
 }
